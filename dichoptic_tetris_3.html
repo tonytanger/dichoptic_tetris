@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dichoptic Tetris</title>
+  <style>
+    :root {
+      --bg-page: #111;
+      --bg-game: #191919;
+      --fg: #fff;
+      --border: #555
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      background: var(--bg-page);
+      color: var(--fg);
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px
+    }
+
+    canvas {
+      border: 2px solid var(--border);
+      background: var(--bg-game)
+    }
+
+    #score,
+    #highScore {
+      margin: 0;
+      font-size: 18px;
+      font-weight: bold
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 16px;
+      font-size: 14px;
+      background: #444;
+      color: #fff
+    }
+
+    #settingsModal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9
+    }
+
+    #settingsContent {
+      background: #191919;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: min(90%, 420px)
+    }
+
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px
+    }
+
+    legend {
+      padding: 0 6px
+    }
+
+    label {
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px
+    }
+
+    .exampleRow {
+      display: flex;
+      gap: 16px;
+      align-items: center
+    }
+
+    .exampleRow canvas {
+      border: none
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .85);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      text-align: center;
+      z-index: 8
+    }
+  </style>
+</head>
+
+<body>
+  <button id="settingsBtn">Settings ⚙️</button>
+  <p id="score">Score: 0</p>
+  <p id="highScore">High Score: 0</p>
+  <canvas id="game" width="360" height="720"></canvas>
+  <p>Keys: ← → ↓ move ↑/Q rotate Space hard‑drop</p>
+
+  <div id="settingsModal">
+    <div id="settingsContent">
+      <h2>Configuration</h2>
+      <fieldset>
+        <legend>Left Eye (RED)</legend>
+        <label>Contrast <input type="range" id="leftContrast" min="0" max="1" step="0.05" value="1"></label>
+        <label>Brightness <input type="range" id="leftBright" min="0" max="1" step="0.05" value="1"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Right Eye (BLUE)</legend>
+        <label>Contrast <input type="range" id="rightContrast" min="0" max="1" step="0.05" value="1"></label>
+        <label>Brightness <input type="range" id="rightBright" min="0" max="1" step="0.05" value="1"></label>
+      </fieldset>
+      <label style="display:flex;align-items:center;gap:6px"><input type="checkbox"
+          id="swapEyes"> Swap left/right eyes</label>
+      <div class="exampleRow">
+        <canvas id="exampleLeft" width="32" height="32"></canvas>
+        <canvas id="exampleRight" width="32" height="32"></canvas>
+      </div>
+      <p style="font-size:14px;line-height:1.4">Wear red‑blue anaglyph glasses (left = red, right = blue). Adjust
+        sliders so each eye sees its blocks clearly.</p>
+      <button id="closeSettings">Close</button>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <h2>GAME OVER</h2>
+    <p id="finalScore"></p>
+    <button id="restartBtn">Restart</button>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const canvas = $('game');
+    const ctx = canvas.getContext('2d');
+    const val = e => parseFloat(e.value);
+
+    function savePref(k, v) { localStorage.setItem(k, v); } function loadPref(k) { return localStorage.getItem(k); }
+
+    const modal = $('settingsModal');
+    $('settingsBtn').onclick = () => modal.style.display = 'flex';
+    $('closeSettings').onclick = () => modal.style.display = 'none';
+
+    const ctrl = { leftContrast: $('leftContrast'), rightContrast: $('rightContrast'), leftBright: $('leftBright'), rightBright: $('rightBright') };
+    for (const id in ctrl) { const s = loadPref(id); if (s !== null) ctrl[id].value = s; ctrl[id].oninput = () => { savePref(id, ctrl[id].value); updateExamples(); } };
+
+    const swapBox = $('swapEyes');
+    const ps = loadPref('swapEyes'); if (ps !== null) swapBox.checked = ps === 'true';
+    swapBox.onchange = () => { savePref('swapEyes', swapBox.checked); updateExamples(); };
+    const isSwap = () => swapBox.checked;
+
+    const exL = $('exampleLeft').getContext('2d');
+    const exR = $('exampleRight').getContext('2d');
+    function drawEx(c, color, a) { c.clearRect(0, 0, 32, 32); c.globalAlpha = a; c.fillStyle = color; c.fillRect(0, 0, 32, 32); c.globalAlpha = 1; c.strokeStyle = '#000'; c.strokeRect(0, 0, 32, 32); }
+    function updateExamples() { const l = val(ctrl.leftContrast) * val(ctrl.leftBright); const r = val(ctrl.rightContrast) * val(ctrl.rightBright); if (isSwap()) { drawEx(exL, '#00f', r); drawEx(exR, '#f00', l); } else { drawEx(exL, '#f00', l); drawEx(exR, '#00f', r); } }
+    updateExamples();
+
+    const COLS = 10, ROWS = 20, BLOCK = 36;
+    canvas.width = COLS * BLOCK; canvas.height = ROWS * BLOCK;
+
+    let dropInterval = 1000, nextSpeed = 1000, dropCounter = 0, lastTime = 0;
+
+    function createMatrix(w, h) { return Array.from({ length: h }, () => Array(w).fill(0)); }
+    const arena = createMatrix(COLS, ROWS);
+
+    const SHAPES = { T: [[0, 1, 0], [1, 1, 1]], O: [[2, 2], [2, 2]], L: [[0, 0, 3], [3, 3, 3]], J: [[4, 0, 0], [4, 4, 4]], I: [[5, 5, 5, 5]], S: [[0, 6, 6], [6, 6, 0]], Z: [[7, 7, 0], [0, 7, 7]] };
+    function randomPiece() { const ks = Object.keys(SHAPES); const m = SHAPES[ks[(Math.random() * ks.length) | 0]]; return m.map(r => r.slice()); }
+
+    const player = { pos: { x: 0, y: 0 }, matrix: null, score: 0 };
+
+    function collide(ar, pl) { for (let y = 0; y < pl.matrix.length; y++)for (let x = 0; x < pl.matrix[y].length; x++)if (pl.matrix[y][x] !== 0) { const ay = y + pl.pos.y, ax = x + pl.pos.x; if (ay >= ROWS || ax < 0 || ax >= COLS || ar[ay][ax] !== 0) return true; } return false; }
+
+    function merge(ar, pl) { pl.matrix.forEach((row, y) => row.forEach((v, x) => { if (v !== 0) ar[y + pl.pos.y][x + pl.pos.x] = v; })); }
+
+    function rotate(mat, dir) { const res = []; const r = mat.length, c = mat[0].length; if (dir > 0) { for (let x = 0; x < c; x++) { const row = []; for (let y = r - 1; y >= 0; y--)row.push(mat[y][x]); res.push(row); } } else { for (let x = c - 1; x >= 0; x--) { const row = []; for (let y = 0; y < r; y++)row.push(mat[y][x]); res.push(row); } } return res; }
+    const KICKS = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 2, y: 0 }, { x: -2, y: 0 }, { x: 0, y: -1 }];
+    function playerRotate(dir) { const orig = player.matrix; const rot = rotate(orig, dir); for (const k of KICKS) { player.pos.x += k.x; player.pos.y += k.y; player.matrix = rot; if (!collide(arena, player)) return; player.pos.x -= k.x; player.pos.y -= k.y; } player.matrix = orig; }
+
+    function arenaSweep() {
+      let rowsCleared = 0; outer: for (let y = ROWS - 1; y >= 0; y--) { for (let x = 0; x < COLS; x++) { if (arena[y][x] === 0) continue outer; } arena.splice(y, 1); arena.unshift(Array(COLS).fill(0)); rowsCleared++; y++; }
+      if (rowsCleared) { player.score += rowsCleared * 100; updateScore(); if (player.score >= nextSpeed) { nextSpeed += 1000; dropInterval = Math.max(100, dropInterval * 0.9); } }
+    }
+
+    function playerReset() { player.matrix = randomPiece(); player.pos.y = 0; player.pos.x = ((COLS >> 1) - (player.matrix[0].length >> 1)); if (collide(arena, player)) { overlay(true); } }
+
+    function playerDrop() { player.pos.y++; if (collide(arena, player)) { player.pos.y--; merge(arena, player); arenaSweep(); playerReset(); } dropCounter = 0; }
+
+    function drawMatrix(mat, offset, color, alpha) { ctx.globalAlpha = alpha; ctx.fillStyle = color; for (let y = 0; y < mat.length; y++)for (let x = 0; x < mat[y].length; x++)if (mat[y][x] !== 0) { const px = (x + offset.x) * BLOCK, py = (y + offset.y) * BLOCK; ctx.fillRect(px, py, BLOCK, BLOCK); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(px + 0.5, py + 0.5, BLOCK - 1, BLOCK - 1); } ctx.globalAlpha = 1; }
+
+    function draw() {
+      ctx.fillStyle = '#191919'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const lAlpha = val(ctrl.leftContrast) * val(ctrl.leftBright); const rAlpha = val(ctrl.rightContrast) * val(ctrl.rightBright);
+      if (isSwap()) { drawMatrix(arena, { x: 0, y: 0 }, '#f00', lAlpha); drawMatrix(player.matrix, player.pos, '#00f', rAlpha); } else { drawMatrix(arena, { x: 0, y: 0 }, '#00f', rAlpha); drawMatrix(player.matrix, player.pos, '#f00', lAlpha); }
+    }
+
+    function update(time = 0) { const dt = time - lastTime; lastTime = time; dropCounter += dt; if (dropCounter > dropInterval) playerDrop(); draw(); requestAnimationFrame(update); }
+
+    function updateScore() { $('score').textContent = 'Score: ' + player.score; const hs = parseInt(loadPref('hs') || 0); if (player.score > hs) { savePref('hs', player.score); } $('highScore').textContent = 'High Score: ' + (loadPref('hs') || 0); }
+
+    function overlay(show) { const ov = $('overlay'); ov.style.display = show ? 'flex' : 'none'; if (show) { $('finalScore').textContent = 'Your score: ' + player.score; } }
+    $('restartBtn').onclick = () => { arena.forEach(r => r.fill(0)); player.score = 0; updateScore(); dropInterval = 1000; nextSpeed = 1000; overlay(false); playerReset(); };
+
+    document.addEventListener('keydown', e => { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault(); switch (e.key) { case 'ArrowLeft': player.pos.x--; if (collide(arena, player)) player.pos.x++; break; case 'ArrowRight': player.pos.x++; if (collide(arena, player)) player.pos.x--; break; case 'ArrowDown': playerDrop(); break; case 'ArrowUp': case 'q': playerRotate(1); break; case ' ': while (!collide(arena, player)) { player.pos.y++; } player.pos.y--; playerDrop(); break; } });
+
+    playerReset(); updateScore(); update();
+  </script>
+</body>
+
+</html>
